@@ -4,8 +4,9 @@ import { useRouter } from 'next/router';
 import { products } from '@/data/products';
 import { useCartStore } from '@/store/cartStore';
 import { ShoppingCart, ArrowLeft, Check } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
+
 
 export default function ProductPage() {
   const router = useRouter();
@@ -13,7 +14,9 @@ export default function ProductPage() {
   const addToCart = useCartStore((s) => s.addToCart);
   const [added, setAdded] = useState(false);
 
+
   const product = products.find((p) => p.id === id);
+
 
   if (router.isFallback || !id) {
     return (
@@ -22,6 +25,7 @@ export default function ProductPage() {
       </div>
     );
   }
+
 
   if (!product) {
     return (
@@ -34,51 +38,13 @@ export default function ProductPage() {
     );
   }
 
+
   const handleAddToCart = () => {
     addToCart(product);
     setAdded(true);
     setTimeout(() => setAdded(false), 2000);
   };
 
-  useEffect(() => {
-    // Inject the widget script
-    const script = document.createElement('script');
-    script.src = "http://localhost:4000/widget.js";
-    script.async = true;
-    document.body.appendChild(script);
-
-    // Initialize widget once script loads
-    script.onload = () => {
-      // @ts-ignore - window.initBargainWidget is injected globally by the script
-      if (window.initBargainWidget) {
-        window.initBargainWidget({
-          tenantId: "demo-tenant-123",
-          productId: typeof id === 'string' ? id : "iphone-15"
-        });
-      }
-    };
-
-    // Listen for the BARGAIN_DEAL_LOCKED postMessage event from the chat widget
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'BARGAIN_DEAL_LOCKED') {
-        const negotiatedPrice: number = event.data.payload?.negotiatedPrice;
-        if (product && negotiatedPrice != null) {
-          addToCart(product, negotiatedPrice);
-          alert(`Deal added to cart at Rs ${negotiatedPrice.toLocaleString('en-PK')}!`);
-        }
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-
-    // Cleanup script and message listener on unmount
-    return () => {
-      if (document.body.contains(script)) {
-        document.body.removeChild(script);
-      }
-      window.removeEventListener('message', handleMessage);
-    };
-  }, [id, product, addToCart]);
 
   return (
     <>
@@ -86,6 +52,7 @@ export default function ProductPage() {
         <title>{product.name} – TechStore</title>
         <meta name="description" content={product.shortDescription} />
       </Head>
+
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
         {/* Breadcrumb */}
@@ -98,6 +65,7 @@ export default function ProductPage() {
           <span>/</span>
           <span className="text-slate-800 font-medium">{product.name}</span>
         </nav>
+
 
         {/* Product Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-20">
@@ -118,11 +86,13 @@ export default function ProductPage() {
             />
           </div>
 
+
           {/* Right: Info */}
           <div className="flex flex-col justify-center">
             <span className="text-sm font-semibold text-indigo-500 uppercase tracking-widest mb-2">
               {product.category}
             </span>
+
 
             <h1 className="text-4xl font-extrabold text-slate-900 mb-3 leading-tight">
               {product.name}
@@ -131,12 +101,15 @@ export default function ProductPage() {
               {product.shortDescription}
             </p>
 
+
             {/* Divider */}
             <div className="border-t border-slate-100 my-6" />
+
 
             <p className="text-slate-600 leading-relaxed mb-8">
               {product.description}
             </p>
+
 
             {/* Price */}
             <div className="flex items-baseline gap-3 mb-8">
@@ -146,13 +119,14 @@ export default function ProductPage() {
               <span className="text-slate-400 text-sm font-medium">PKR</span>
             </div>
 
+
             {/* Add to Cart Button */}
             <button
               id={`add-to-cart-${product.id}`}
               onClick={handleAddToCart}
               className={`flex items-center justify-center gap-3 w-full py-4 rounded-2xl text-base font-bold transition-all duration-300 shadow-lg cursor-pointer ${added
-                  ? 'bg-emerald-500 text-white shadow-emerald-200'
-                  : 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white hover:shadow-indigo-300 hover:shadow-xl hover:-translate-y-0.5'
+                ? 'bg-emerald-500 text-white shadow-emerald-200'
+                : 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white hover:shadow-indigo-300 hover:shadow-xl hover:-translate-y-0.5'
                 }`}
             >
               {added ? (
@@ -168,6 +142,7 @@ export default function ProductPage() {
                 </>
               )}
             </button>
+
 
             {/* View Cart Link */}
             <Link
