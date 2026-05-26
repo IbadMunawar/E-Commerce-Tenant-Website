@@ -9,11 +9,13 @@ export interface CartItem {
   originalPrice: number;
   finalPrice: number;
   quantity: number;
+  /** BargainBaaS negotiation session ID, present only when the price was negotiated */
+  sessionId?: string;
 }
 
 interface CartStore {
   items: CartItem[];
-  addToCart: (product: Product, negotiatedPrice?: number) => void;
+  addToCart: (product: Product, negotiatedPrice?: number, sessionId?: string) => void;
   removeFromCart: (id: string) => void;
   clearCart: () => void;
   cartTotal: () => number;
@@ -25,7 +27,7 @@ export const useCartStore = create<CartStore>()(
     (set, get) => ({
       items: [],
 
-      addToCart: (product, negotiatedPrice) => {
+      addToCart: (product, negotiatedPrice, sessionId) => {
         const finalPrice = negotiatedPrice ?? product.originalPrice;
         set((state) => {
           const existing = state.items.find((item) => item.id === product.id);
@@ -48,6 +50,9 @@ export const useCartStore = create<CartStore>()(
                 originalPrice: product.originalPrice,
                 finalPrice,
                 quantity: 1,
+                // Store the BargainBaaS session ID so it can be forwarded
+                // to the checkout API for server-side price verification.
+                ...(sessionId !== undefined && { sessionId }),
               },
             ],
           };

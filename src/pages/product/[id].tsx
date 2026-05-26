@@ -1,10 +1,11 @@
 import Head from 'next/head';
 import Image from 'next/image';
+import Script from 'next/script';
 import { useRouter } from 'next/router';
 import { products } from '@/data/products';
 import { useCartStore } from '@/store/cartStore';
 import { ShoppingCart, ArrowLeft, Check } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 
 
@@ -46,12 +47,58 @@ export default function ProductPage() {
   };
 
 
+  useEffect(() => {
+    /**
+     * Handles postMessage events emitted by the BargainBaaS (INA) widget
+     * when the user and the AI engine agree on a negotiated price.
+     *
+     * Security gates (applied in order):
+     *  1. Origin check  – reject messages not from our own host
+     *  2. Source check  – must be 'ina-widget'
+     *  3. Type check    – must be 'INA_PRICE_AGREED'
+     *  4. Product check – must target this specific product page
+     */
+    function handleINAMessage(event: MessageEvent) {
+      // Gate 1: reject cross-origin messages
+      if (event.origin !== window.location.origin) return;
+
+      const data = event.data;
+
+      // Gate 2 & 3: validate widget source and event type
+      if (data?.source !== 'ina-widget' || data?.type !== 'INA_PRICE_AGREED') return;
+
+      // Gate 4: confirm the message targets this exact product
+      if (data.productId !== product.id) return;
+
+      // All gates passed — add to cart with the negotiated price and session ID
+      addToCart(product, data.price, data.sessionId);
+    }
+
+    window.addEventListener('message', handleINAMessage);
+
+    return () => {
+      window.removeEventListener('message', handleINAMessage);
+    };
+  }, [product, addToCart]);
+
+
   return (
     <>
       <Head>
         <title>{product.name} – TechStore</title>
         <meta name="description" content={product.shortDescription} />
       </Head>
+
+
+      {/* BargainBaaS widget loader – runs after page hydration so the
+          message listener above is already registered when the widget
+          initialises and starts communicating via postMessage. */}
+      <Script
+        src={`${process.env.NEXT_PUBLIC_INA_CDN_URL}/loader.js`}
+        data-ina-tenant={process.env.NEXT_PUBLIC_INA_PUBLIC_KEY}
+        data-ina-product={product.id}
+        strategy="afterInteractive"
+      />
 
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">

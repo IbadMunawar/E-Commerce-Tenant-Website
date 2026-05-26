@@ -1,13 +1,73 @@
 import Head from 'next/head';
 import Image from 'next/image';
 import Link from 'next/link';
+import { useRouter } from 'next/router';
 import { useCartStore } from '@/store/cartStore';
-import { Trash2, ShoppingBag, ArrowRight } from 'lucide-react';
+import { Trash2, ShoppingBag, ArrowRight, AlertTriangle, Loader2 } from 'lucide-react';
+import { useState } from 'react';
 
 export default function CartPage() {
+  const router = useRouter();
   const items = useCartStore((s) => s.items);
   const cartTotal = useCartStore((s) => s.cartTotal());
   const removeFromCart = useCartStore((s) => s.removeFromCart);
+
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  /**
+   * Loops through every cart item that carries a BargainBaaS sessionId and
+   * fires a POST to our local /api/verify-deal proxy for each one.
+   * The proxy performs the HMAC-SHA256 handshake with the INA backend.
+   * If ANY item fails verification the loop aborts, an error banner is shown,
+   * and the router.push to /checkout is never called.
+   */
+  async function handleCheckout() {
+    // Reset any previous error and enter loading state
+    setVerifyError(null);
+    setIsVerifying(true);
+
+    // Isolate items that were bargained via the INA widget
+    const negotiatedItems = items.filter((item) => item.sessionId);
+
+    // Sequential loop — we stop at the first failure rather than firing all
+    // requests in parallel, so the error message can name the specific item.
+    for (const item of negotiatedItems) {
+      try {
+        const res = await fetch('/api/verify-deal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: item.sessionId,
+            productId: item.id,
+            finalPrice: item.finalPrice,
+          }),
+        });
+
+        const data = await res.json();
+
+        if (!data.verified) {
+          // Verification rejected — surface the error and halt checkout
+          setVerifyError(
+            `Price validation failed for "${item.name}". Please renegotiate before checking out.`
+          );
+          setIsVerifying(false);
+          return;
+        }
+      } catch {
+        // Network or parse error reaching our own API route
+        setVerifyError(
+          `Could not verify the negotiated price for "${item.name}". Check your connection and try again.`
+        );
+        setIsVerifying(false);
+        return;
+      }
+    }
+
+    // All negotiated items passed — safe to proceed
+    setIsVerifying(false);
+    router.push('/checkout');
+  }
 
   return (
     <>
@@ -142,14 +202,35 @@ export default function CartPage() {
                   <p className="text-xs text-slate-400 mt-1">Inclusive of all taxes</p>
                 </div>
 
-                <Link
-                  href="/checkout"
+                {/* Verification error banner — shown only when a deal check fails */}
+                {verifyError && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-2.5 rounded-xl bg-rose-50 border border-rose-200 px-4 py-3 mb-4 text-sm text-rose-700"
+                  >
+                    <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-rose-500" />
+                    <span>{verifyError}</span>
+                  </div>
+                )}
+
+                <button
                   id="proceed-to-checkout"
-                  className="flex items-center justify-center gap-2 w-full py-4 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-bold text-base shadow-lg hover:shadow-indigo-300 hover:shadow-xl transition-all duration-300 hover:-translate-y-0.5"
+                  onClick={handleCheckout}
+                  disabled={isVerifying}
+                  className="flex items-center justify-center gap-2 w-full py-4 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 text-white font-bold text-base shadow-lg transition-all duration-300 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed disabled:shadow-none disabled:translate-y-0 hover:shadow-indigo-300 hover:shadow-xl hover:-translate-y-0.5"
                 >
-                  Proceed to Checkout
-                  <ArrowRight className="w-4 h-4" />
-                </Link>
+                  {isVerifying ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Verifying prices…
+                    </>
+                  ) : (
+                    <>
+                      Proceed to Checkout
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
 
                 <Link
                   href="/"
