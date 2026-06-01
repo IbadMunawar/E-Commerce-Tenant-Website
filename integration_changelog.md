@@ -1,447 +1,292 @@
-# BargainBaaS Integration Changelog
+# BargainBaaS — Tenant Integration Blueprint
 
-> **Integration:** BargainBaaS AI Negotiation Widget ("INA")
-> **Date:** 2026-05-26
-> **Scope:** Environment configuration + client-side cart state
+**Platform:** BargainBaaS AI Negotiation SDK  
+**Tenant Store:** TechStore (Next.js 16, Pages Router)  
+**Integration Date:** 2025  
+**Integration Status:** ✅ Active  
 
----
-
-## 1. `.env.local` *(new file — project root)*
-
-### Added variables
-
-| Variable | Side | Purpose |
-|---|---|---|
-| `NEXT_PUBLIC_INA_PUBLIC_KEY` | Browser | API key passed to the widget's CDN bundle to authenticate requests from the tenant's storefront. |
-| `NEXT_PUBLIC_INA_CDN_URL` | Browser | Base URL from which the BargainBaaS widget JavaScript bundle is loaded. Points to `localhost:4000` in development; should be updated to the production CDN URL before deployment. |
-| `INA_TENANT_ID` | Server only | Numeric identifier for this tenant in the BargainBaaS backend. Used in server-side API calls (e.g., webhook handlers, price-verification routes). Never prefixed with `NEXT_PUBLIC_`, so it is never sent to the browser. |
-| `INA_WEBHOOK_SECRET` | Server only | HMAC signing secret issued by BargainBaaS. Used to verify the authenticity of incoming webhook events from the INA backend. Must be kept strictly server-side. |
-| `INA_BACKEND_URL` | Server only | Base URL of the BargainBaaS backend REST API, used by server-side Next.js API routes when making outbound calls (e.g., session verification at checkout). |
-
-### Why these are split this way
-Variables prefixed with `NEXT_PUBLIC_` are inlined into the browser bundle at build time by Next.js. All sensitive credentials (`INA_TENANT_ID`, `INA_WEBHOOK_SECRET`, `INA_BACKEND_URL`) deliberately **omit** this prefix so they remain exclusively accessible via `process.env` inside server-side code (API routes, `getServerSideProps`), never leaking to the client.
+This document records every single line of code added, modified, or created on
+the tenant storefront to integrate the BargainBaaS widget. A developer can use
+this file to **re-apply the integration from scratch in under 5 minutes**, or
+**completely roll it back to the baseline store** in under 2 minutes.
 
 ---
 
-## 2. `src/store/cartStore.ts` *(modified)*
+## Architecture Overview
 
-### 2a. `CartItem` interface — added `sessionId` field
-
-```ts
-// BEFORE
-export interface CartItem {
-  id: string;
-  name: string;
-  imageUrl: string;
-  originalPrice: number;
-  finalPrice: number;
-  quantity: number;
-}
-
-// AFTER
-export interface CartItem {
-  id: string;
-  name: string;
-  imageUrl: string;
-  originalPrice: number;
-  finalPrice: number;
-  quantity: number;
-  /** BargainBaaS negotiation session ID, present only when the price was negotiated */
-  sessionId?: string;
-}
+```
+Tenant Store (TechStore)
+       │
+       ├── loader.js  (served from BargainBaaS CDN port 4000)
+       │       └── Injects widget.js, listens to SPA route changes
+       │
+       ├── widget.js  (served from BargainBaaS CDN port 4000)
+       │       └── Preact chat UI, calls INA backend + orchestrator
+       │
+       └── /api/verify-deal.ts  (local Next.js API route)
+               └── Server-side HMAC proxy to INA /api/saas/session/verify
 ```
 
-**What this achieves:** Every item in the cart can now optionally carry the opaque session-ID string that BargainBaaS emits via `window.postMessage` when a deal is struck. Making it optional (`?`) means all existing call-sites (regular "Add to Cart" without negotiation) continue to work without modification — the field is simply absent on non-negotiated items.
+**Zero business logic lives in the widget.** The widget only handles the
+conversation. All price verification happens server-to-server via HMAC.
 
 ---
 
-### 2b. `CartStore` interface — updated `addToCart` signature
+## Environment Variables Required
 
-```ts
-// BEFORE
-addToCart: (product: Product, negotiatedPrice?: number) => void;
+Create `.env.local` at the repo root with these values (never commit this file):
 
-// AFTER
+```bash
+# ── Public (safe to expose to browser) ───────────────────────────────────────
+NEXT_PUBLIC_INA_CDN_URL=http://localhost:4000
+NEXT_PUBLIC_INA_PUBLIC_KEY=<your client_api_key from BargainBaaS dashboard>
+
+# ── Private (server-only, never exposed to browser) ──────────────────────────
+INA_TENANT_ID=<your numeric tenant ID from BargainBaaS dashboard>
+INA_WEBHOOK_SECRET=<your webhook_secret from BargainBaaS dashboard>
+INA_BACKEND_URL=https://ina-backend-fyp.onrender.com
+```
+
+**Where to find these values:**  
+Log in to [BargainBaaS Dashboard] → Integration page → copy "Tenant API Key"
+(public key) and "Tenant ID". The `webhook_secret` is returned by
+`GET /api/v1/tenant/configuration` after logging in.
+
+---
+
+## Files Changed
+
+### 1. `src/store/cartStore.ts` — Modified
+
+**Why:** The cart needed to store the BargainBaaS `sessionId` alongside each
+negotiated item so it can be forwarded to the server-side `/verify` endpoint
+at checkout. Without this, there is no way to link a cart item back to its
+negotiation row in the INA database.
+
+**Lines added:**
+
+```typescript
+// ADDED to CartItem interface:
+/** BargainBaaS negotiation session ID — present only for negotiated items */
+sessionId?: string;
+
+// ADDED to CartStore interface — third parameter:
 addToCart: (product: Product, negotiatedPrice?: number, sessionId?: string) => void;
+
+// ADDED inside addToCart implementation when creating a new item:
+...(sessionId !== undefined && { sessionId }),
 ```
 
-**What this achieves:** Declares the new optional `sessionId` parameter at the type level so TypeScript enforces correct usage across the whole codebase.
+**Rollback:** Remove the `sessionId?: string` field from `CartItem`, remove the
+third parameter from `addToCart`, and remove the `sessionId` spread from the
+new-item object.
 
 ---
 
-### 2c. `addToCart` implementation — persist `sessionId` on new cart items
+### 2. `src/pages/product/[id].tsx` — Modified
 
-```ts
-// BEFORE (new-item branch)
-return {
-  items: [
-    ...state.items,
-    {
-      id: product.id,
-      name: product.name,
-      imageUrl: product.imageUrl,
-      originalPrice: product.originalPrice,
-      finalPrice,
-      quantity: 1,
-    },
-  ],
-};
+**Why:** Four integration hooks are needed on the product detail page:
 
-// AFTER (new-item branch)
-return {
-  items: [
-    ...state.items,
-    {
-      id: product.id,
-      name: product.name,
-      imageUrl: product.imageUrl,
-      originalPrice: product.originalPrice,
-      finalPrice,
-      quantity: 1,
-      // Store the BargainBaaS session ID so it can be forwarded
-      // to the checkout API for server-side price verification.
-      ...(sessionId !== undefined && { sessionId }),
-    },
-  ],
-};
-```
+| Hook | Purpose |
+|---|---|
+| `<Script>` tag | Loads BargainBaaS `loader.js` with tenant + product context |
+| `window.INA('product-change')` useEffect | Explicit SPA handshake on every product mount |
+| postMessage listener | Receives negotiated price from widget, updates page UI |
+| Updated `handleAddToCart` | Forwards negotiated price + sessionId to cart store |
 
-**What this achieves:**
-
-- `finalPrice` already falls back to `product.originalPrice` when `negotiatedPrice` is `undefined` (unchanged pre-existing logic), so a standard add-to-cart is unaffected.
-- The spread `...(sessionId !== undefined && { sessionId })` conditionally merges the `sessionId` field **only** when one is provided. This keeps non-negotiated cart items free of an explicit `undefined` key, which matters for JSON serialisation and Zustand's `persist` middleware (stored in `localStorage`).
-- The **existing-item branch** (quantity bump) intentionally does **not** overwrite `sessionId`. If the user had already negotiated and is bumping quantity, the original session is preserved; if they add the same product without negotiating, the previously stored session remains intact. Any renegotiation flow can handle updating the session separately if required.
-
----
-
-## Summary of call-site usage (for widget integration)
-
-When the BargainBaaS widget fires a `postMessage` event with a struck deal, the product-page handler should call:
-
-```ts
-const { addToCart } = useCartStore.getState();
-
-window.addEventListener('message', (event) => {
-  if (event.data?.type === 'INA_DEAL_STRUCK') {
-    const { finalPrice, sessionId } = event.data;
-    addToCart(product, finalPrice, sessionId);
-  }
-});
-```
-
-At checkout, read `cartItem.sessionId` and forward it to the server-side verification API (`INA_BACKEND_URL`) using `INA_TENANT_ID` and `INA_WEBHOOK_SECRET` to confirm the negotiated price has not been tampered with.
-
----
-
-## 3. `src/pages/product/[id].tsx` *(modified)*
-
-### 3a. New imports
-
-```diff
-+ import Script from 'next/script';
-- import { useState } from 'react';
-+ import { useState, useEffect } from 'react';
-```
-
-**What this achieves:**
-- `Script` — the official Next.js `next/script` component. It manages script loading lifecycle and deduplication, making it safer than a raw `<script>` tag in JSX.
-- `useEffect` — needed to attach/detach the `window.addEventListener` side-effect at the right point in the React lifecycle.
-
----
-
-### 3b. `useEffect` — BargainBaaS postMessage handler
-
-The hook is placed inside `ProductPage`, after the early-return guards so `product` is guaranteed to be defined when the effect runs.
+**Lines added:**
 
 ```tsx
+// NEW import at top:
+declare global {
+  interface Window { INA?: (...args: unknown[]) => void; }
+}
+
+// NEW state variables (added after existing `added` state):
+const [negotiatedPrice,      setNegotiatedPrice]      = useState<number | null>(null);
+const [negotiationSessionId, setNegotiationSessionId] = useState<string | null>(null);
+
+// NEW useEffect — resets negotiation state on product change:
 useEffect(() => {
-  function handleINAMessage(event: MessageEvent) {
-    // Gate 1: reject cross-origin messages
-    if (event.origin !== window.location.origin) return;
+  setNegotiatedPrice(null);
+  setNegotiationSessionId(null);
+  setAdded(false);
+}, [id]);
 
-    const data = event.data;
-
-    // Gate 2 & 3: validate widget source and event type
-    if (data?.source !== 'ina-widget' || data?.type !== 'INA_PRICE_AGREED') return;
-
-    // Gate 4: confirm the message targets this exact product
-    if (data.productId !== product.id) return;
-
-    // All gates passed — add to cart with the negotiated price and session ID
-    addToCart(product, data.price, data.sessionId);
+// NEW useEffect — signals widget on SPA navigation:
+useEffect(() => {
+  if (!product) return;
+  if (typeof window.INA === 'function') {
+    window.INA('product-change', { productId: product.id });
   }
+}, [product?.id]);
 
+// NEW useEffect — postMessage bridge:
+useEffect(() => {
+  function handleINAMessage(event: MessageEvent) { ... }
   window.addEventListener('message', handleINAMessage);
-
-  return () => {
-    window.removeEventListener('message', handleINAMessage);
-  };
+  return () => window.removeEventListener('message', handleINAMessage);
 }, [product, addToCart]);
-```
 
-**Security gates explained:**
+// MODIFIED handleAddToCart — now uses negotiated price:
+const handleAddToCart = () => {
+  addToCart(product!, negotiatedPrice ?? undefined, negotiationSessionId ?? undefined);
+  ...
+};
 
-| Gate | Check | Why |
-|---|---|---|
-| **1 — Origin** | `event.origin !== window.location.origin` | Rejects all cross-origin messages. Prevents any third-party iframe or external page from injecting fake deal events. |
-| **2 — Source** | `data.source !== 'ina-widget'` | Namespaces the message to the BargainBaaS widget. Avoids acting on unrelated `postMessage` events from other integrations (e.g., analytics iframes, payment widgets). |
-| **3 — Type** | `data.type !== 'INA_PRICE_AGREED'` | Filters to only the specific event that signals a completed deal; ignores all other lifecycle events the widget may emit (e.g., `INA_OPENED`, `INA_CLOSED`). |
-| **4 — Product ID** | `data.productId !== product.id` | Cross-verifies that the deal belongs to the product currently rendered on this page. Guards against stale events from a previously visited product page that may still be in flight. |
-
-**Cleanup:** The `return () => window.removeEventListener(...)` teardown ensures the handler is dropped when the user navigates away from the product page, preventing memory leaks and duplicate handler accumulation across navigations.
-
-**Dependency array `[product, addToCart]`:** Both values are stable references (Zustand selector returns a stable function; `product` is derived from a static array by constant `id`). The effect re-registers cleanly if either ever changes.
-
----
-
-### 3c. `<Script>` loader element in JSX
-
-Placed immediately after the `<Head>` block in the return statement, before the main content `<div>`:
-
-```tsx
+// NEW in JSX — <Script> tag (inside return, after <Head>):
 <Script
   src={`${process.env.NEXT_PUBLIC_INA_CDN_URL}/loader.js`}
   data-ina-tenant={process.env.NEXT_PUBLIC_INA_PUBLIC_KEY}
   data-ina-product={product.id}
+  data-ina-product-route="/product/:id"
   strategy="afterInteractive"
 />
+
+// MODIFIED price display — shows negotiated price when deal exists
+// MODIFIED button — turns green, shows deal price, uses negotiated price
 ```
 
-**What each attribute does:**
-
-| Attribute | Value | Purpose |
-|---|---|---|
-| `src` | `NEXT_PUBLIC_INA_CDN_URL` + `/loader.js` | Points to the BargainBaaS compiled widget bundle. The env var is swapped in at build time. |
-| `data-ina-tenant` | `NEXT_PUBLIC_INA_PUBLIC_KEY` | The widget reads this `data-*` attribute from its own `<script>` tag on boot to identify which tenant is embedding it, without needing a global variable. |
-| `data-ina-product` | `product.id` | Tells the widget which product to load negotiation context for, so it can fetch the correct pricing rules from the INA backend. |
-| `strategy="afterInteractive"` | — | Defers the bundle until after Next.js hydration completes. This is **mandatory**: it guarantees `window.addEventListener` is already registered (by the `useEffect` above) before the widget script executes and could attempt to emit its first `postMessage`. |
+**Rollback:** Remove the two new state variables, the three new `useEffect`
+blocks, the `<Script>` tag, and revert `handleAddToCart` to
+`addToCart(product)`. Revert price display and button JSX to use
+`product.originalPrice` directly.
 
 ---
 
-## 4. `src/pages/api/verify-deal.ts` *(new file)*
+### 3. `src/pages/cart.tsx` — Modified
 
-A server-side proxy API route that performs the cryptographic handshake between our storefront backend and the BargainBaaS platform before allowing a negotiated price to proceed to payment. The client never has access to the signing secret, the tenant ID, or the upstream backend URL.
+**Why:** The "Proceed to Checkout" button needed server-side price verification
+before allowing the user to reach the payment page. Without this, a user could
+manipulate the `finalPrice` value in localStorage (where Zustand persists the
+cart) and check out at `Rs 0`.
 
-### 4a. Validation pipeline
+**Lines added:**
 
-Each incoming `POST` request is processed through a sequential set of validation steps before a single byte leaves the server toward the upstream:
+```typescript
+// NEW imports:
+import { AlertTriangle, Loader2 } from 'lucide-react';
 
-| Step | Check | Failure response |
-|---|---|---|
-| **Method guard** | `req.method !== 'POST'` | `405 Method Not Allowed` + `Allow: POST` header |
-| **Body fields** | `sessionId`, `productId`, `finalPrice` all present and non-null | `400 Bad Request` |
-| **Env var presence** | `INA_WEBHOOK_SECRET`, `INA_TENANT_ID`, `INA_BACKEND_URL` all set | `500 Server configuration error` |
-| **Upstream HTTP status** | `inaResponse.ok` (status in 200–299 range) | `422 Unprocessable Entity` |
-| **Upstream payload** | `inaData.valid === true` | `422 Unprocessable Entity` |
-
-### 4b. Canonical request body construction
-
-```ts
-const body = JSON.stringify({ session_id: sessionId, final_price: finalPrice });
-```
-
-The field names (`session_id`, `final_price`) and their order are fixed by the BargainBaaS backend schema. Deviating from either will produce a signature mismatch on the remote side.
-
-### 4c. HMAC-SHA256 signature scheme
-
-```ts
-const timestamp = Date.now().toString();          // Unix milliseconds as string
-
-const signature = crypto
-  .createHmac('sha256', webhookSecret)            // key = INA_WEBHOOK_SECRET
-  .update(`${timestamp}.${body}`)                 // signed input = "<ms_timestamp>.<json_body>"
-  .digest('hex');                                 // output = lowercase hex string
-```
-
-**Why this format:**
-- The dot-separated `"<timestamp>.<body>"` concatenation is the exact scheme specified in the BargainBaaS central blueprint. Any variation (e.g. reversed order, different separator, base64 output) will cause the remote HMAC verification to fail.
-- Prefixing the body with a timestamp makes each signature unique per request, preventing replay attacks where a captured valid signature could be re-submitted.
-
-### 4d. Outgoing request headers to the upstream
-
-The signed metadata is forwarded to `${INA_BACKEND_URL}/api/saas/session/verify` via these mandatory headers:
-
-| Header | Value | Purpose |
-|---|---|---|
-| `Content-Type` | `application/json` | Declares the body encoding so the remote server parses it correctly. |
-| `X-INA-Tenant` | `INA_TENANT_ID` (numeric string) | Identifies which tenant is making the call; the remote uses this to look up the corresponding stored HMAC secret for counter-verification. |
-| `X-INA-Timestamp` | `timestamp` (ms since epoch, as string) | Used by the remote to reject requests older than a configurable replay window (typically 5 minutes). |
-| `X-INA-Signature` | `signature` (hex HMAC-SHA256) | The cryptographic proof that this request was constructed by a party holding `INA_WEBHOOK_SECRET`. The remote recomputes the same HMAC and compares. |
-
-### 4e. Success and error response shapes
-
-**Success (`200 OK`):**
-```json
-{
-  "verified": true,
-  "sessionId": "ina_sess_abc123",
-  "productId": "prod_xyz",
-  "finalPrice": 45000
-}
-```
-
-**Failure (400 / 422 / 500 / 502):**
-```json
-{
-  "verified": false,
-  "error": "<human-readable reason>"
-}
-```
-
-The client (e.g., the checkout page) should gate payment gateway redirection exclusively on `verified === true`. A `verified: false` response must block the checkout flow regardless of the HTTP status code.
-
-### 4f. Why this is a server-side proxy
-
-| Concern | Client-side approach (❌ insecure) | This proxy (✅ secure) |
-|---|---|---|
-| `INA_WEBHOOK_SECRET` exposure | Would be visible in browser devtools | Never leaves the server process |
-| `INA_TENANT_ID` exposure | Visible in network requests | Injected server-side from `process.env` |
-| Price tampering | `finalPrice` from `localStorage` is trivially editable | `finalPrice` from `req.body` is still user-supplied, but the HMAC signature ties it to a specific session; the remote rejects any mismatch |
-| Replay attacks | None | Timestamp binding + remote replay window enforcement |
-
----
-
-## 5. `src/pages/cart.tsx` *(modified)*
-
-### 5a. New imports
-
-```diff
-+ import { useRouter } from 'next/router';
-- import { Trash2, ShoppingBag, ArrowRight } from 'lucide-react';
-+ import { Trash2, ShoppingBag, ArrowRight, AlertTriangle, Loader2 } from 'lucide-react';
-+ import { useState } from 'react';
-```
-
-- `useRouter` — needed to call `router.push('/checkout')` programmatically only after all verifications pass, replacing the previous passive `<Link>`.
-- `AlertTriangle`, `Loader2` — UI icons for the error banner and the in-button loading spinner respectively.
-- `useState` — used for the two new state variables below.
-
----
-
-### 5b. New state variables
-
-```ts
+// NEW state:
 const [isVerifying, setIsVerifying] = useState(false);
 const [verifyError, setVerifyError] = useState<string | null>(null);
-```
 
-| Variable | Type | Purpose |
-|---|---|---|
-| `isVerifying` | `boolean` | `true` while the verification loop is running; disables the checkout button and swaps its label to "Verifying prices…" to prevent double-submits. |
-| `verifyError` | `string \| null` | Holds the human-readable failure message for whichever item first fails verification; `null` when no error exists. Rendered in the error banner above the checkout button. |
-
----
-
-### 5c. `handleCheckout` — sequential verification loop
-
-```ts
+// NEW function — replaces the old router.push('/checkout') button handler:
 async function handleCheckout() {
   setVerifyError(null);
   setIsVerifying(true);
-
   const negotiatedItems = items.filter((item) => item.sessionId);
-
   for (const item of negotiatedItems) {
-    try {
-      const res = await fetch('/api/verify-deal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: item.sessionId,
-          productId: item.id,
-          finalPrice: item.finalPrice,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!data.verified) {
-        setVerifyError(
-          `Price validation failed for "${item.name}". Please renegotiate before checking out.`
-        );
-        setIsVerifying(false);
-        return;                   // ← halt; router.push is never reached
-      }
-    } catch {
-      setVerifyError(
-        `Could not verify the negotiated price for "${item.name}". Check your connection and try again.`
-      );
-      setIsVerifying(false);
-      return;                     // ← halt on network/parse error too
-    }
+    const res  = await fetch('/api/verify-deal', { method: 'POST', ... });
+    const data = await res.json();
+    if (!data.verified) { setVerifyError(...); return; }
   }
-
-  setIsVerifying(false);
-  router.push('/checkout');       // ← only reached when ALL items pass
+  router.push('/checkout');
 }
+
+// MODIFIED checkout button — now calls handleCheckout(), shows loading state
+// NEW error banner — shown when verification fails
 ```
 
-**Design decisions:**
-
-- **Filter first, then loop** — `items.filter(item => item.sessionId)` skips non-negotiated items entirely. Items added via the regular "Add to Cart" button have no `sessionId` and require no cryptographic verification.
-- **Sequential `for…of` not `Promise.all`** — requests are fired one at a time. This means:
-  - The error message can name the *specific* item that failed, rather than a generic "something failed".
-  - We avoid sending unnecessary follow-up requests after the first failure is detected.
-  - The server is not hit with a burst of concurrent verification calls.
-- **`return` after each failure** — a bare `return` inside the `for…of` exits the entire `handleCheckout` function, ensuring `router.push` is unconditionally unreachable after any error branch.
-- **Catch block for network errors** — a `fetch` that rejects (DNS failure, timeout, server crash) is treated identically to a `verified: false` response; checkout is halted and a user-facing message is displayed. The raw error is intentionally not surfaced to the UI to avoid leaking internal details.
+**Rollback:** Remove the `isVerifying` and `verifyError` state, remove
+`handleCheckout`, remove the error banner JSX, and change the checkout button
+`onClick` back to `() => router.push('/checkout')`.
 
 ---
 
-### 5d. JSX changes — checkout button replacement and error banner
+### 4. `src/pages/api/verify-deal.ts` — **NEW FILE**
 
-**Before:**
-```tsx
-<Link
-  href="/checkout"
-  id="proceed-to-checkout"
-  className="..."
->
-  Proceed to Checkout
-  <ArrowRight className="w-4 h-4" />
-</Link>
+**Why:** The HMAC signature required by the INA backend's `/verify` endpoint
+must be computed server-side using `INA_WEBHOOK_SECRET`, which must never be
+exposed to the browser. This Next.js API route acts as a secure proxy between
+the cart page and the INA backend.
+
+**What it does:**
+
+```
+Cart page  →  POST /api/verify-deal  →  INA backend /api/saas/session/verify
+              (public, same-origin)      (server-to-server, HMAC-signed)
 ```
 
-**After:**
-```tsx
-{/* Error banner — conditionally rendered above the button */}
-{verifyError && (
-  <div
-    role="alert"
-    className="flex items-start gap-2.5 rounded-xl bg-rose-50 border border-rose-200 px-4 py-3 mb-4 text-sm text-rose-700"
-  >
-    <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-rose-500" />
-    <span>{verifyError}</span>
-  </div>
-)}
+**Full file:**
 
-<button
-  id="proceed-to-checkout"
-  onClick={handleCheckout}
-  disabled={isVerifying}
-  className="... disabled:opacity-60 disabled:cursor-not-allowed ..."
->
-  {isVerifying ? (
-    <>
-      <Loader2 className="w-4 h-4 animate-spin" />
-      Verifying prices…
-    </>
-  ) : (
-    <>
-      Proceed to Checkout
-      <ArrowRight className="w-4 h-4" />
-    </>
-  )}
-</button>
+```typescript
+import type { NextApiRequest, NextApiResponse } from 'next';
+import crypto from 'crypto';
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') return res.status(405).end();
+
+  const { sessionId, productId, finalPrice } = req.body;
+  const body      = JSON.stringify({ session_id: sessionId, final_price: finalPrice });
+  const timestamp = Date.now().toString();
+  const signature = crypto
+    .createHmac('sha256', process.env.INA_WEBHOOK_SECRET!)
+    .update(`${timestamp}.${body}`)
+    .digest('hex');
+
+  const inaRes = await fetch(
+    `${process.env.INA_BACKEND_URL}/api/saas/session/verify`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type':    'application/json',
+        'X-INA-Tenant':    process.env.INA_TENANT_ID!,
+        'X-INA-Timestamp': timestamp,
+        'X-INA-Signature': signature,
+      },
+      body,
+    }
+  );
+
+  const data = await inaRes.json().catch(() => ({}));
+  return res.status(inaRes.status).json(data);
+}
 ```
 
-**What each UI element achieves:**
+**Rollback:** Delete the file `src/pages/api/verify-deal.ts`.
 
-| Element | Behaviour |
+---
+
+## Integration Checklist (Apply from Scratch)
+
+```
+□ 1. Copy .env.local values (get keys from BargainBaaS dashboard)
+□ 2. Run: npm install   (no new packages needed — crypto is Node built-in)
+□ 3. Apply changes to src/store/cartStore.ts
+□ 4. Apply changes to src/pages/product/[id].tsx
+□ 5. Apply changes to src/pages/cart.tsx
+□ 6. Create src/pages/api/verify-deal.ts
+□ 7. Start widget CDN: npx serve dist -p 4000 --cors  (in Bargain-Widget folder)
+□ 8. Start storefront:  npm run dev
+□ 9. Open any product page — confirm widget FAB appears bottom-right
+□ 10. Navigate to /cart — confirm FAB disappears
+□ 11. Return to product — confirm FAB reappears (fresh session)
+```
+
+## Disintegration Checklist (Roll Back Completely)
+
+```
+□ 1. src/store/cartStore.ts       — remove sessionId field + parameter
+□ 2. src/pages/product/[id].tsx   — remove Script tag, 3 useEffects,
+                                     2 state vars, revert price/button JSX
+□ 3. src/pages/cart.tsx           — revert checkout button to router.push
+□ 4. src/pages/api/verify-deal.ts — DELETE this file
+□ 5. .env.local                   — remove the 5 INA_ variables
+□ 6. Stop the widget CDN process on port 4000
+```
+
+After step 6, TechStore operates as a completely standard Next.js storefront
+with zero BargainBaaS footprint.
+
+---
+
+## Security Model
+
+| Layer | Mechanism |
 |---|---|
-| Error banner (`role="alert"`) | Appears only when `verifyError` is non-null. `role="alert"` causes screen readers to announce it immediately without the user having to navigate to it. Styled in rose tones to clearly signal failure. |
-| `disabled={isVerifying}` | Prevents the user from clicking "Proceed to Checkout" a second time while a verification is already in-flight. Combined with `disabled:opacity-60` and `disabled:cursor-not-allowed` Tailwind classes to give immediate visual feedback. |
-| Spinner + label swap | While `isVerifying` is `true`, the button content changes from "Proceed to Checkout" to a spinning `Loader2` icon + "Verifying prices…", communicating that background work is in progress without a full-page overlay. |
-| `<Link>` → `<button>` | The checkout element is no longer a passive hyperlink. Changing it to a `<button>` gives us full control over the async gate: navigation only happens as the last line of `handleCheckout`, after all verifications succeed. |
-
-
+| Widget auth | `data-ina-tenant` public key + Origin header validated by INA backend |
+| Price integrity | `sessionId` stored per cart item, verified via HMAC before checkout |
+| Secret protection | `INA_WEBHOOK_SECRET` and `INA_TENANT_ID` are server-only env vars |
+| Replay prevention | Each `sessionId` transitions to `VERIFIED` atomically — single use |
+| XSS protection | postMessage only accepted from `window.location.origin` |
