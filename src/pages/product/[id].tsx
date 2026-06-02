@@ -81,7 +81,7 @@ export default function ProductPage() {
       setNegotiationSessionId(sessionId);
 
       // 2. Add to cart with the negotiated price so cart reflects the deal
-      addToCart(product, agreedPrice, sessionId);
+      addToCart(product!, agreedPrice, sessionId);
     }
 
     window.addEventListener('message', handleINAMessage);
@@ -248,3 +248,7 @@ export default function ProductPage() {
     </>
   );
 }
+
+
+
+
