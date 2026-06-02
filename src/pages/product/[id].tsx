@@ -68,7 +68,7 @@ export default function ProductPage() {
       if (!isValidType) return;
 
       // Gate 3: must be for this specific product
-      if (data.productId !== product.id) return;
+      if (data.productId !== product!.id) return;
 
       // Resolve the price field — widget sends either 'price' or 'finalPrice'
       const agreedPrice: number = data.finalPrice ?? data.price;

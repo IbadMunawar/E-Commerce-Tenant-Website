@@ -51,10 +51,10 @@ export default async function handler(
   // ── 3. Load private server-side credentials ──────────────────────────────────
   const webhookSecret = process.env.INA_WEBHOOK_SECRET;
   const tenantId = process.env.INA_TENANT_ID;
-  const backendUrl = process.env.INA_BACKEND_URL;
+  const verifyUrl = process.env.INA_VERIFY_URL;
 
-  if (!webhookSecret || !tenantId || !backendUrl) {
-    console.error('[verify-deal] Missing one or more required env vars: INA_WEBHOOK_SECRET, INA_TENANT_ID, INA_BACKEND_URL');
+  if (!webhookSecret || !tenantId || !verifyUrl) {
+    console.error('[verify-deal] Missing one or more required env vars: INA_WEBHOOK_SECRET, INA_TENANT_ID, INA_VERIFY_URL');
     return res.status(500).json({
       verified: false,
       error: 'Server configuration error',
@@ -77,7 +77,7 @@ export default async function handler(
 
   // ── 7. Forward the request to the BargainBaaS verification endpoint ──────────
   try {
-    const inaResponse = await fetch(`${backendUrl}/api/saas/session/verify`, {
+    const inaResponse = await fetch(verifyUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
