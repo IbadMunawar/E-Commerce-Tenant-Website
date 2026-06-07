@@ -136,7 +136,7 @@ const handleAddToCart = () => {
 
 // NEW in JSX — <Script> tag (inside return, after <Head>):
 <Script
-  src={`${process.env.NEXT_PUBLIC_INA_CDN_URL}/loader.js`}
+  src={process.env.NEXT_PUBLIC_INA_CDN_URL}
   data-ina-tenant={process.env.NEXT_PUBLIC_INA_PUBLIC_KEY}
   data-ina-product={product.id}
   data-ina-product-route="/product/:id"
