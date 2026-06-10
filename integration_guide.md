@@ -146,14 +146,15 @@ useEffect(() => {
 
     setNegotiatedPrice(agreedPrice);
     setNegotiationSessionId(sessionId);
+    addToCart(product!, agreedPrice, sessionId);
   }
   window.addEventListener('message', handleINAMessage);
   return () => window.removeEventListener('message', handleINAMessage);
-}, [product]);
+}, [product, addToCart]);
 // === BARGAIN_BAAS_INTEGRATION_END ===
 ```
 
-> **Simple Explanation (Why?):** Isay **PostMessage Event Bridge** kehte hain. Chunki widget iframe ya external engine par chal sakta hai, jab chat mein deal accept hoti hai, toh widget browser mein yeh event push karta hai. Yeh listener us event ko securely catch karke deal price save kar leta hai.
+> **Simple Explanation (Why?):** Isay **PostMessage Event Bridge** kehte hain. Chunki widget iframe ya external engine par chal sakta hai, jab chat mein deal accept hoti hai, toh widget browser mein yeh event push karta hai. Yeh listener us event ko securely catch karke deal price save kar leta hai aur item ko automatically global cart mein add kar deta hai taake user ko dobara button na dabana pare.
 
 ---
 
@@ -345,3 +346,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 | `api/verify-deal.ts` | 1 | Entire handler body |
 
 > Ab aap be-fiqr ho kar present karo. 🦾🔥🚀
+

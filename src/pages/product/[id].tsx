@@ -63,10 +63,11 @@ export default function ProductPage() {
 
       setNegotiatedPrice(agreedPrice);
       setNegotiationSessionId(sessionId);
+      addToCart(product!, agreedPrice, sessionId);
     }
     window.addEventListener('message', handleINAMessage);
     return () => window.removeEventListener('message', handleINAMessage);
-  }, [product]);
+  }, [product, addToCart]);
   // === BARGAIN_BAAS_INTEGRATION_END ===
 
   const handleAddToCart = () => {
