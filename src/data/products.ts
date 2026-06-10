@@ -61,7 +61,7 @@ export const products: Product[] = [
     description:
       'The Samsung Galaxy S24 Ultra is the ultimate Android powerhouse featuring Galaxy AI, a 200MP camera system with 100x Space Zoom, a built-in S Pen for seamless productivity, and a 5000mAh battery with 45W fast charging. With titanium frame construction and a 6.8" Dynamic AMOLED 2X display at 120Hz, it stands at the pinnacle of mobile technology.',
     originalPrice: 319000,
-    imageUrl: '/iphone-15-pro.png', // reused placeholder
+    imageUrl: '/Samsung Galaxy S24 Ultra.png',
     category: 'Smartphones',
   },
   {
@@ -71,7 +71,7 @@ export const products: Product[] = [
     description:
       'The Dell XPS 15 combines stunning OLED display technology with Intel Core Ultra 9 processing power and NVIDIA GeForce RTX 4070 graphics. Housed in a machined aluminum chassis with a near-borderless InfinityEdge display, it delivers professional-grade performance for content creators, developers, and power users demanding the very best.',
     originalPrice: 449000,
-    imageUrl: '/macbook-air-m3.png', // reused placeholder
+    imageUrl: '/Dell XPS 15.png',
     category: 'Laptops',
     badge: 'Premium',
   },
@@ -82,7 +82,7 @@ export const products: Product[] = [
     description:
       'AirPods Pro (2nd generation) with the H2 chip deliver up to 2x more Active Noise Cancellation, Adaptive Transparency that reduces loud environmental sounds, and Personalized Spatial Audio that places sound all around you. The MagSafe Charging Case with Precision Finding provides up to 30 hours of battery life and a built-in speaker for easy locating.',
     originalPrice: 69000,
-    imageUrl: '/sony-wh1000xm5.png', // reused placeholder
+    imageUrl: '/AirPods Pro 2nd Gen.png',
     category: 'Audio',
   },
   {
@@ -92,7 +92,7 @@ export const products: Product[] = [
     description:
       'The Nintendo Switch – OLED Model features a vibrant 7-inch OLED screen with vivid colors and crisp contrast for portable gaming. With a wide adjustable stand, enhanced audio, 64GB internal storage, and a wired LAN port in the dock, it offers an elevated gaming experience whether at home or on the go.',
     originalPrice: 89000,
-    imageUrl: '/ps5.png', // reused placeholder
+    imageUrl: '/Nintendo Switch OLED.png',
     category: 'Gaming',
   },
 ];
