@@ -1,81 +1,34 @@
-import crypto from 'crypto';
 import type { NextApiRequest, NextApiResponse } from 'next';
+import crypto from 'crypto';
 
-// ─── Response shape types ─────────────────────────────────────────────────────
-
-type VerifySuccessResponse = {
-  verified: true;
-  sessionId: string;
-  productId: string;
-  finalPrice: number;
-};
-
-type VerifyErrorResponse = {
-  verified: false;
-  error: string;
-};
-
+type VerifySuccessResponse = { verified: true; sessionId: string; productId: string; finalPrice: number };
+type VerifyErrorResponse = { verified: false; error: string };
 type VerifyResponse = VerifySuccessResponse | VerifyErrorResponse;
 
-// ─── Handler ──────────────────────────────────────────────────────────────────
-
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<VerifyResponse>
-) {
-  // ── 1. Method guard ─────────────────────────────────────────────────────────
+export default async function handler(req: NextApiRequest, res: NextApiResponse<VerifyResponse>) {
+  // === BARGAIN_BAAS_INTEGRATION_START ===
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
-    return res
-      .status(405)
-      .json({ verified: false, error: 'Method Not Allowed' });
+    return res.status(405).json({ verified: false, error: 'Method Not Allowed' });
   }
 
-  // ── 2. Extract and validate request body fields ──────────────────────────────
   const { sessionId, productId, finalPrice } = req.body ?? {};
-
-  if (
-    sessionId === undefined ||
-    sessionId === null ||
-    productId === undefined ||
-    productId === null ||
-    finalPrice === undefined ||
-    finalPrice === null
-  ) {
-    return res.status(400).json({
-      verified: false,
-      error: 'Missing required fields: sessionId, productId, finalPrice',
-    });
+  if (!sessionId || !productId || finalPrice === undefined || finalPrice === null) {
+    return res.status(400).json({ verified: false, error: 'Missing required parameters: sessionId, productId, finalPrice' });
   }
 
-  // ── 3. Load private server-side credentials ──────────────────────────────────
   const webhookSecret = process.env.INA_WEBHOOK_SECRET;
   const tenantId = process.env.INA_TENANT_ID;
-  const verifyUrl = process.env.INA_VERIFY_URL;
+  const verifyUrl = process.env.INA_VERIFY_URL || 'https://ina-backend-fyp.onrender.com/api/saas/session/verify';
 
-  if (!webhookSecret || !tenantId || !verifyUrl) {
-    console.error('[verify-deal] Missing one or more required env vars: INA_WEBHOOK_SECRET, INA_TENANT_ID, INA_VERIFY_URL');
-    return res.status(500).json({
-      verified: false,
-      error: 'Server configuration error',
-    });
+  if (!webhookSecret || !tenantId) {
+    return res.status(500).json({ verified: false, error: 'Upstream microservice configuration keys missing' });
   }
 
-  // ── 4. Build the canonical request body payload ──────────────────────────────
-  // The field order and naming must exactly match the BargainBaaS backend schema.
-  const body = JSON.stringify({ session_id: sessionId, final_price: finalPrice });
-
-  // ── 5. Generate Unix millisecond timestamp ───────────────────────────────────
+  const body = JSON.stringify({ session_id: sessionId, final_price: Number(finalPrice) });
   const timestamp = Date.now().toString();
+  const signature = crypto.createHmac('sha256', webhookSecret).update(`${timestamp}.${body}`).digest('hex');
 
-  // ── 6. Compute HMAC-SHA256 signature ────────────────────────────────────────
-  // Signed input: "<timestamp>.<body>"  — must match the central blueprint exactly.
-  const signature = crypto
-    .createHmac('sha256', webhookSecret)
-    .update(`${timestamp}.${body}`)
-    .digest('hex');
-
-  // ── 7. Forward the request to the BargainBaaS verification endpoint ──────────
   try {
     const inaResponse = await fetch(verifyUrl, {
       method: 'POST',
@@ -88,38 +41,18 @@ export default async function handler(
       body,
     });
 
-    // ── 8. Handle non-2xx responses from the upstream ────────────────────────────
     if (!inaResponse.ok) {
-      const upstream = await inaResponse.text();
-      console.error(`[verify-deal] Upstream ${inaResponse.status}: ${upstream}`);
-      return res.status(422).json({
-        verified: false,
-        error: 'Deal verification failed: upstream rejected the request',
-      });
+      return res.status(422).json({ verified: false, error: 'Upstream HMAC validation rejected request' });
     }
 
-    // ── 9. Parse the upstream JSON and check the validity flag ───────────────────
     const inaData = await inaResponse.json();
-
     if (!inaData?.valid) {
-      return res.status(422).json({
-        verified: false,
-        error: 'Deal verification failed: price mismatch or session invalid',
-      });
+      return res.status(422).json({ verified: false, error: 'Price signature token mapping validation mismatch' });
     }
 
-    // ── 10. All checks passed — return confirmation to the client ─────────────────
-    return res.status(200).json({
-      verified: true,
-      sessionId: String(sessionId),
-      productId: String(productId),
-      finalPrice: Number(finalPrice),
-    });
+    return res.status(200).json({ verified: true, sessionId: String(sessionId), productId: String(productId), finalPrice: Number(finalPrice) });
   } catch (err) {
-    console.error('[verify-deal] Network or parse error:', err);
-    return res.status(502).json({
-      verified: false,
-      error: 'Failed to reach the BargainBaaS verification service',
-    });
+    return res.status(502).json({ verified: false, error: 'Failed to reach central BargainBaaS verification runtime' });
   }
+  // === BARGAIN_BAAS_INTEGRATION_END ===
 }

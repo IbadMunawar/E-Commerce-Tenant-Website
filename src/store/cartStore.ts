@@ -9,13 +9,17 @@ export interface CartItem {
   originalPrice: number;
   finalPrice: number;
   quantity: number;
+  // === BARGAIN_BAAS_INTEGRATION_START ===
   /** BargainBaaS negotiation session ID, present only when the price was negotiated */
   sessionId?: string;
+  // === BARGAIN_BAAS_INTEGRATION_END ===
 }
 
 interface CartStore {
   items: CartItem[];
+  // === BARGAIN_BAAS_INTEGRATION_START ===
   addToCart: (product: Product, negotiatedPrice?: number, sessionId?: string) => void;
+  // === BARGAIN_BAAS_INTEGRATION_END ===
   removeFromCart: (id: string) => void;
   clearCart: () => void;
   cartTotal: () => number;
@@ -26,7 +30,6 @@ export const useCartStore = create<CartStore>()(
   persist(
     (set, get) => ({
       items: [],
-
       addToCart: (product, negotiatedPrice, sessionId) => {
         const finalPrice = negotiatedPrice ?? product.originalPrice;
         set((state) => {
@@ -50,36 +53,25 @@ export const useCartStore = create<CartStore>()(
                 originalPrice: product.originalPrice,
                 finalPrice,
                 quantity: 1,
-                // Store the BargainBaaS session ID so it can be forwarded
-                // to the checkout API for server-side price verification.
+                // === BARGAIN_BAAS_INTEGRATION_START ===
+                // Store the session ID to forward to checkout verification proxy
                 ...(sessionId !== undefined && { sessionId }),
+                // === BARGAIN_BAAS_INTEGRATION_END ===
               },
             ],
           };
         });
       },
-
       removeFromCart: (id) => {
         set((state) => ({
           items: state.items.filter((item) => item.id !== id),
         }));
       },
-
       clearCart: () => set({ items: [] }),
-
-      cartTotal: () => {
-        return get().items.reduce(
-          (total, item) => total + item.finalPrice * item.quantity,
-          0
-        );
-      },
-
-      cartCount: () => {
-        return get().items.reduce((count, item) => count + item.quantity, 0);
-      },
+      cartTotal: () => get().items.reduce((total, item) => total + item.finalPrice * item.quantity, 0),
+      cartCount: () => get().items.reduce((count, item) => count + item.quantity, 0),
     }),
-    {
-      name: 'techstore-cart',
-    }
+    { name: 'techstore-cart' }
   )
 );
+
